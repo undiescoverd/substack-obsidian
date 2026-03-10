@@ -10,7 +10,7 @@ import subprocess
 import sys
 import shutil
 import tempfile
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 st.set_page_config(page_title="Substack → Obsidian", page_icon="📚", layout="centered")
@@ -20,8 +20,8 @@ st.caption("Scrape any Substack archive and download it as an Obsidian vault")
 
 with st.expander("How to use", expanded=False):
     st.markdown("""
-1. Paste your Substack archive URL (e.g. `https://example.substack.com/archive?sort=new`)
-2. Pick the date range you want
+1. Paste any Substack URL — e.g. `https://example.substack.com`
+2. Pick the date range you want to scrape
 3. Click **Run Scraper**
 4. Download the zip when it's done
 5. Unzip it, then open Obsidian → **Open folder as vault** → select the unzipped folder
@@ -36,7 +36,7 @@ url = st.text_input(
 
 col1, col2 = st.columns(2)
 with col1:
-    start_date = st.date_input("From", value=date(2025, 1, 1))
+    start_date = st.date_input("From", value=date.today() - timedelta(days=365))
 with col2:
     end_date = st.date_input("To", value=date.today())
 
