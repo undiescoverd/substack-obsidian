@@ -403,7 +403,11 @@ class SubstackArchiveScraper:
         for source in soup.find_all('source'):
             source.decompose()
 
-        # Strip noisy image attributes and convert raw S3 URLs to CDN URLs
+        # Strip Substack CDN signature tokens ($s_!...!,) from all URLs —
+        # they're ugly in markdown and the CDN serves images fine without them.
+        _TOKEN_RE = re.compile(r'\$s_![^!]*!,')
+
+        # Strip noisy image attributes and clean up image URLs
         _CDN_PREFIX = (
             "https://substackcdn.com/image/fetch/"
             "w_1456,c_limit,f_auto,q_auto:good,fl_progressive:steep/"
@@ -414,12 +418,20 @@ class SubstackArchiveScraper:
             src = img.get('src', '')
             if 'substack-post-media.s3.amazonaws.com' in src and 'substackcdn.com' not in src:
                 img['src'] = _CDN_PREFIX + quote(src, safe='')
+            else:
+                img['src'] = _TOKEN_RE.sub('', src)
 
-        # Unwrap image-only <a> wrappers (Substack clickable image links)
-        for a_tag in soup.find_all('a'):
-            children = list(a_tag.children)
-            if len(children) == 1 and getattr(children[0], 'name', None) == 'img':
-                a_tag.unwrap()
+        # Unwrap <div class="image2-inset"> wrappers inside image links
+        for div in soup.find_all('div', class_='image2-inset'):
+            div.unwrap()
+
+        # Remove Substack image overlay buttons
+        for div in soup.find_all('div', class_='image-link-expand'):
+            div.decompose()
+
+        # Unwrap <a> wrappers that link to substackcdn images
+        for a_tag in soup.find_all('a', href=re.compile(r'substackcdn\.com/image')):
+            a_tag.unwrap()
 
         # Clean headings: replace <br> with space, unwrap full-span <strong>/<em>
         for tag in soup.find_all(re.compile(r'^h[1-6]$')):

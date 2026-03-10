@@ -20,8 +20,8 @@ st.caption("Scrape any Substack archive and download it as an Obsidian vault")
 
 with st.expander("How to use", expanded=False):
     st.markdown("""
-1. Paste any Substack URL — e.g. `https://example.substack.com`
-2. Pick the date range you want to scrape
+1. Paste any Substack URL — a homepage, archive link, or single article link
+2. For archives, pick the date range you want to scrape
 3. Click **Run Scraper**
 4. Download the zip when it's done
 5. Unzip it, then open Obsidian → **Open folder as vault** → select the unzipped folder
@@ -31,17 +31,23 @@ with st.expander("How to use", expanded=False):
 
 # --- Inputs ---
 url = st.text_input(
-    "Archive URL",
-    placeholder="https://example.substack.com",
-    help="Paste any Substack URL — homepage, archive, or post link. We'll find the archive automatically.",
+    "Substack URL",
+    placeholder="https://example.substack.com  or  https://example.substack.com/p/my-post",
+    help="Paste any Substack URL — homepage, archive, or a single article link (`/p/...`). We'll detect the mode automatically.",
 )
 
-today = date.today()
-col1, col2 = st.columns(2)
-with col1:
-    start_date = st.date_input("From", value=today, min_value=date(2010, 1, 1), max_value=today)
-with col2:
-    end_date = st.date_input("To", value=today, min_value=date(2010, 1, 1), max_value=today)
+is_single_article = '/p/' in url.strip()
+
+if is_single_article:
+    st.info("Single article detected — date range not needed.")
+    start_date = end_date = None
+else:
+    today = date.today()
+    col1, col2 = st.columns(2)
+    with col1:
+        start_date = st.date_input("From", value=today, min_value=date(2010, 1, 1), max_value=today)
+    with col2:
+        end_date = st.date_input("To", value=today, min_value=date(2010, 1, 1), max_value=today)
 
 vault_name = st.text_input(
     "Vault name (used as folder name inside the zip)",
@@ -76,15 +82,14 @@ def normalize_url(raw: str) -> str:
 if st.button("▶ Run Scraper", type="primary", use_container_width=True):
     if not url.strip():
         st.error("Please enter a Substack URL.")
-    elif start_date > end_date:
+    elif not is_single_article and start_date > end_date:
         st.error("Start date must be before end date.")
     else:
         resolved_url = normalize_url(url)
-        is_single = '/p/' in resolved_url
-        if is_single:
-            st.caption(f"Single article URL: `{resolved_url}`")
+        if is_single_article:
+            st.caption(f"Single article: `{resolved_url}`")
         else:
-            st.caption(f"Using archive URL: `{resolved_url}`")
+            st.caption(f"Archive URL: `{resolved_url}`")
         scraper_path = Path(__file__).parent / "substack_archive_scraper.py"
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -94,7 +99,7 @@ if st.button("▶ Run Scraper", type="primary", use_container_width=True):
                 sys.executable, str(scraper_path),
                 resolved_url,
             ]
-            if not is_single:
+            if not is_single_article:
                 cmd += ["--start-date", str(start_date), "--end-date", str(end_date)]
             cmd += ["-o", output_dir]
 
@@ -122,7 +127,10 @@ if st.button("▶ Run Scraper", type="primary", use_container_width=True):
                 article_count = len(list(articles_dir.glob("**/*.md"))) if articles_dir.exists() else 0
 
                 if article_count == 0:
-                    st.warning("No articles were found for the selected date range. Try widening the date range.")
+                    if is_single_article:
+                        st.warning("Could not fetch the article. Check the URL and try again.")
+                    else:
+                        st.warning("No articles were found for the selected date range. Try widening the date range.")
                 else:
                     # Zip the vault
                     zip_path = Path(tmpdir) / vault_name.strip()
