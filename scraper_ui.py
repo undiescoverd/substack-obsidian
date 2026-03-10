@@ -30,7 +30,8 @@ with st.expander("How to use", expanded=False):
 # --- Inputs ---
 url = st.text_input(
     "Archive URL",
-    placeholder="https://example.substack.com/archive?sort=new",
+    placeholder="https://example.substack.com",
+    help="Paste any Substack URL — homepage, archive, or post link. We'll find the archive automatically.",
 )
 
 col1, col2 = st.columns(2)
@@ -45,13 +46,30 @@ vault_name = st.text_input(
     placeholder="substack_vault",
 )
 
+def normalize_url(raw: str) -> str:
+    """Accept any Substack URL and return the archive URL."""
+    raw = raw.strip().rstrip("/")
+    # Strip query params to get base
+    base = raw.split("?")[0]
+    # Remove known path suffixes so we always start from root
+    for suffix in ["/archive", "/about", "/posts", "/podcast"]:
+        if base.endswith(suffix):
+            base = base[: -len(suffix)]
+    # Must be a substack.com domain
+    if ".substack.com" not in base and "substack.com" not in base:
+        return raw  # return as-is, scraper will error with a clear message
+    return base + "/archive?sort=new"
+
+
 # --- Run ---
 if st.button("▶ Run Scraper", type="primary", use_container_width=True):
     if not url.strip():
-        st.error("Please enter an archive URL.")
+        st.error("Please enter a Substack URL.")
     elif start_date > end_date:
         st.error("Start date must be before end date.")
     else:
+        archive_url = normalize_url(url)
+        st.caption(f"Using archive URL: `{archive_url}`")
         scraper_path = Path(__file__).parent / "substack_archive_scraper.py"
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -59,7 +77,7 @@ if st.button("▶ Run Scraper", type="primary", use_container_width=True):
 
             cmd = [
                 sys.executable, str(scraper_path),
-                url.strip(),
+                archive_url,
                 "--start-date", str(start_date),
                 "--end-date", str(end_date),
                 "-o", output_dir,
