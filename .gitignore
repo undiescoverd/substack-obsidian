@@ -1,0 +1,5 @@
+substack_vault/
+__pycache__/
+*.pyc
+.DS_Store
+*.zip
