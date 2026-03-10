@@ -6,6 +6,7 @@ Scrapes archive pages from Substack and filters articles from current year (2025
 Designed for ruben.substack.com but works with any Substack archive.
 """
 
+import os
 import requests
 import json
 import re
@@ -46,33 +47,45 @@ class SubstackMarkdownConverter(MarkdownConverter):
 class SubstackArchiveScraper:
     """Scrapes Substack archive pages and creates Obsidian vault."""
     
-    def __init__(self, archive_url: str, output_dir: str = "./substack_vault", 
-                 year_filter: int = 2026):
+    def __init__(self, archive_url: str, output_dir: str = "./substack_vault",
+                 year_filter: int = 2026, cookie: str = None):
         """
         Initialize the scraper.
-        
+
         Args:
             archive_url: Full archive URL (e.g., "https://ruben.substack.com/archive?sort=new")
             output_dir: Directory to store generated markdown files
             year_filter: Year to filter articles (default: 2025)
+            cookie: Substack session cookie (substack.sid value) for accessing paid content
         """
         self.archive_url = archive_url
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(exist_ok=True)
         self.year_filter = year_filter
-        
+
         # Create subdirectories
         self.articles_dir = self.output_dir / "articles"
         self.articles_dir.mkdir(exist_ok=True)
-        
+
         self.metadata_file = self.output_dir / "metadata.json"
-        
+
         self.session = requests.Session()
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         })
-        
+
+        # Set session cookie for paid content access
+        self.has_cookie = False
+        if cookie:
+            # Strip "substack.sid=" prefix if user pasted the full cookie string
+            cookie = cookie.strip()
+            if cookie.lower().startswith('substack.sid='):
+                cookie = cookie.split('=', 1)[1]
+            self.session.cookies.set('substack.sid', cookie, domain='.substack.com')
+            self.has_cookie = True
+            print("Session cookie configured — paid content will be accessible")
+
         self.articles = []
         
     def extract_publication_name(self) -> str:
@@ -154,6 +167,7 @@ class SubstackArchiveScraper:
                         'author': author,
                         'content': post.get('body_html', ''),
                         'tags': tags,
+                        'audience': post.get('audience', 'everyone'),
                     })
 
                 offset += limit
@@ -571,6 +585,15 @@ tags: {json.dumps(tags)}
 
         if articles:
             print(f"\nFetched {len(articles)} articles via API")
+
+            paid_count = sum(1 for a in articles if a.get('audience') == 'only_paid')
+            if paid_count:
+                if self.has_cookie:
+                    print(f"  {paid_count} paid article(s) — cookie is set, full content will be fetched")
+                else:
+                    print(f"  ⚠ {paid_count} paid article(s) detected — without a cookie, only previews will be scraped")
+                    print(f"    Use --cookie or set SUBSTACK_COOKIE to get full content")
+
             print(f"Fetching full article content...\n")
             for i, article in enumerate(articles, 1):
                 print(f"  [{i}/{len(articles)}] {article['title'][:50]}...")
@@ -626,6 +649,12 @@ tags: {json.dumps(tags)}
 
         self.save_metadata()
 
+        # Check for articles with empty content (likely paywalled)
+        empty_count = sum(1 for a in self.articles if not a.get('content'))
+        if empty_count and not self.has_cookie:
+            print(f"\n  ⚠ {empty_count} article(s) have no content — they may be behind a paywall.")
+            print(f"    Tip: Use --cookie YOUR_SID or set SUBSTACK_COOKIE to access paid content.")
+
         print(f"\n{'='*60}")
         print(f"✓ COMPLETED!")
         print(f"{'='*60}")
@@ -668,6 +697,11 @@ def main():
         default='./substack_vault',
         help='Output directory for the vault (default: ./substack_vault)'
     )
+    parser.add_argument(
+        '--cookie',
+        default=None,
+        help='Substack session cookie (substack.sid) for accessing paid content. Also reads SUBSTACK_COOKIE env var.'
+    )
 
     args = parser.parse_args()
 
@@ -675,7 +709,8 @@ def main():
     use_date_range = args.start_date and args.end_date
     year = args.year if args.year else 2026
 
-    scraper = SubstackArchiveScraper(args.url, args.output, year_filter=year)
+    cookie = args.cookie or os.environ.get('SUBSTACK_COOKIE')
+    scraper = SubstackArchiveScraper(args.url, args.output, year_filter=year, cookie=cookie)
 
     if '/p/' in args.url:
         # Single article mode — skip filtering

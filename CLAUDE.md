@@ -17,6 +17,11 @@ python3 substack_archive_scraper.py "https://example.substack.com/archive?sort=n
 python3 substack_archive_scraper.py "https://example.substack.com/archive" -y 2025
 python3 substack_archive_scraper.py "https://example.substack.com/archive" --start-date 2025-01-01 --end-date 2025-12-31 -o ./my_vault
 
+# Scrape with paid content access (cookie from browser DevTools → substack.sid)
+python3 substack_archive_scraper.py "https://example.substack.com/archive" --cookie YOUR_SID_VALUE
+# Or via environment variable:
+SUBSTACK_COOKIE=YOUR_SID_VALUE python3 substack_archive_scraper.py "https://example.substack.com/archive"
+
 # Run general scraper (secondary, no date filtering)
 python3 substack_scraper.py "https://example.substack.com" -o ./vault --full-content
 
@@ -50,6 +55,7 @@ Each article has YAML frontmatter (title, subtitle, author, date, url, tags) and
 - **Rate limiting**: 0.5s between API pages, 1s between article fetches.
 - **Date normalization**: `normalize_date()` handles ISO datetimes, `YYYY-MM-DD`, and natural date strings (`Jan 15, 2025`).
 - **Widget removal**: Substack injects subscription/share widgets that produce orphan text — these are decomposed in preprocessing and stripped in postprocessing as belt-and-suspenders.
+- **Authentication**: Paid/subscriber-only content requires a `substack.sid` session cookie. Pass via `--cookie` CLI arg or `SUBSTACK_COOKIE` env var. The cookie is set on `.substack.com` domain and propagates to all requests via the session cookie jar — no per-request changes needed.
 
 ## Obsidian Compatibility — Critical Rules
 

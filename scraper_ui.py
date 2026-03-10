@@ -5,6 +5,7 @@ Run locally:  streamlit run scraper_ui.py
 Deploy:       https://streamlit.io/cloud
 """
 
+import os
 import streamlit as st
 import subprocess
 import sys
@@ -27,6 +28,8 @@ with st.expander("How to use", expanded=False):
 5. Unzip it, then open Obsidian → **Open folder as vault** → select the unzipped folder
 
 **Multiple authors?** Use the same vault name for each scrape and unzip into the same folder — each author gets their own subfolder under `articles/`.
+
+**Paid content?** Expand "Authentication" below and paste your `substack.sid` cookie to scrape subscriber-only articles.
 """)
 
 # --- Inputs ---
@@ -54,6 +57,14 @@ vault_name = st.text_input(
     value="substack_vault",
     placeholder="substack_vault",
 )
+
+with st.expander("Authentication (optional)"):
+    cookie_input = st.text_input(
+        "Substack session cookie (`substack.sid`)",
+        type="password",
+        placeholder="Paste your substack.sid value here",
+        help="Required only for paid/subscriber-only content. Find it in browser DevTools → Application → Cookies → substack.com → substack.sid",
+    )
 
 def normalize_url(raw: str) -> str:
     """Accept any Substack URL and return the archive or single-article URL."""
@@ -103,6 +114,10 @@ if st.button("▶ Run Scraper", type="primary", use_container_width=True):
                 cmd += ["--start-date", str(start_date), "--end-date", str(end_date)]
             cmd += ["-o", output_dir]
 
+            proc_env = os.environ.copy()
+            if cookie_input and cookie_input.strip():
+                proc_env['SUBSTACK_COOKIE'] = cookie_input.strip()
+
             log_placeholder = st.empty()
             log_lines = []
 
@@ -113,6 +128,7 @@ if st.button("▶ Run Scraper", type="primary", use_container_width=True):
                     stderr=subprocess.STDOUT,
                     text=True,
                     bufsize=1,
+                    env=proc_env,
                 )
                 for line in proc.stdout:
                     log_lines.append(line.rstrip())
