@@ -13,7 +13,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Optional
-from urllib.parse import urljoin
+from urllib.parse import urljoin, quote
 from bs4 import BeautifulSoup, NavigableString
 from markdownify import MarkdownConverter, ATX
 
@@ -293,6 +293,11 @@ class SubstackArchiveScraper:
                 subtitle_elem = soup.find('h2', {'class': re.compile('.*subtitle.*')})
             article['subtitle'] = subtitle_elem.get_text(strip=True) if subtitle_elem else ''
 
+            # Extract title if not already set or if placeholder (e.g. single-article mode)
+            title_elem = soup.find('h1')
+            if title_elem and (not article.get('title') or article['title'] == article.get('slug')):
+                article['title'] = title_elem.get_text(strip=True)
+
             # Extract content - Substack uses div.available-content > div.body.markup
             content_elem = soup.find('div', {'class': 'available-content'})
             if content_elem:
@@ -315,6 +320,14 @@ class SubstackArchiveScraper:
             print(f"    Error fetching article details: {e}")
             return article
     
+    def scrape_single_article(self, article_url: str) -> List[Dict]:
+        """Scrape a single article by URL (e.g. https://x.substack.com/p/slug)."""
+        slug_match = re.search(r'/p/([a-zA-Z0-9_-]+)', article_url)
+        slug = slug_match.group(1) if slug_match else 'unknown'
+        article = {'url': article_url, 'slug': slug, 'title': slug}
+        self.fetch_article_details(article)
+        return [article]
+
     def filter_by_year(self, articles: List[Dict], year: int) -> List[Dict]:
         """Filter articles to only those from specified year."""
         filtered = []
@@ -390,10 +403,17 @@ class SubstackArchiveScraper:
         for source in soup.find_all('source'):
             source.decompose()
 
-        # Strip noisy image attributes
+        # Strip noisy image attributes and convert raw S3 URLs to CDN URLs
+        _CDN_PREFIX = (
+            "https://substackcdn.com/image/fetch/"
+            "w_1456,c_limit,f_auto,q_auto:good,fl_progressive:steep/"
+        )
         for img in soup.find_all('img'):
             for attr in ('srcset', 'sizes', 'loading', 'decoding'):
                 img.attrs.pop(attr, None)
+            src = img.get('src', '')
+            if 'substack-post-media.s3.amazonaws.com' in src and 'substackcdn.com' not in src:
+                img['src'] = _CDN_PREFIX + quote(src, safe='')
 
         # Unwrap image-only <a> wrappers (Substack clickable image links)
         for a_tag in soup.find_all('a'):
@@ -608,8 +628,8 @@ def main():
         description='Scrape Substack archive and filter by date range or year'
     )
     parser.add_argument(
-        'archive_url',
-        help='Full Substack archive URL (e.g., https://ruben.substack.com/archive?sort=new)'
+        'url',
+        help='Substack URL — archive (https://x.substack.com/archive) or single article (https://x.substack.com/p/slug)'
     )
     parser.add_argument(
         '-y', '--year',
@@ -639,15 +659,21 @@ def main():
     use_date_range = args.start_date and args.end_date
     year = args.year if args.year else 2026
 
-    scraper = SubstackArchiveScraper(args.archive_url, args.output, year_filter=year)
-    all_articles = scraper.scrape_all()
+    scraper = SubstackArchiveScraper(args.url, args.output, year_filter=year)
 
-    if use_date_range:
-        print(f"\nFiltering articles from {args.start_date} to {args.end_date}...\n")
-        scraper.articles = scraper.filter_by_date_range(all_articles, args.start_date, args.end_date)
+    if '/p/' in args.url:
+        # Single article mode — skip filtering
+        print(f"Single article mode: {args.url}")
+        scraper.articles = scraper.scrape_single_article(args.url)
     else:
-        print(f"\nFiltering articles from {year}...\n")
-        scraper.articles = scraper.filter_by_year(all_articles, year)
+        all_articles = scraper.scrape_all()
+
+        if use_date_range:
+            print(f"\nFiltering articles from {args.start_date} to {args.end_date}...\n")
+            scraper.articles = scraper.filter_by_date_range(all_articles, args.start_date, args.end_date)
+        else:
+            print(f"\nFiltering articles from {year}...\n")
+            scraper.articles = scraper.filter_by_year(all_articles, year)
 
     print(f"Kept {len(scraper.articles)} articles after filtering\n")
     scraper.generate()

@@ -1,0 +1,180 @@
+================================================================================
+                    SUBSTACK SCRAPER - QUICK REFERENCE
+================================================================================
+
+YOUR TASK: Get all Ruben's 2026 articles into Obsidian
+
+================================================================================
+                              QUICK START
+================================================================================
+
+Step 1: Install Dependencies (1 minute)
+─────────────────────────────────────────────────────────────────────────────
+pip install requests beautifulsoup4 --break-system-packages
+
+
+Step 2: Run Scraper (2 minutes)
+─────────────────────────────────────────────────────────────────────────────
+python substack_archive_scraper.py "https://ruben.substack.com/archive?sort=new"
+
+Result: Vault created in ./substack_vault/
+
+
+Step 3: Open in Obsidian (30 seconds)
+─────────────────────────────────────────────────────────────────────────────
+1. Open Obsidian
+2. File → Create new vault
+3. Choose "Store in a folder on my computer"
+4. Select the substack_vault folder
+5. Open INDEX.md and start reading!
+
+================================================================================
+                         COMMAND REFERENCE
+================================================================================
+
+Basic:
+  python substack_archive_scraper.py "https://ruben.substack.com/archive?sort=new"
+
+Get 2024 articles instead:
+  python substack_archive_scraper.py "https://ruben.substack.com/archive?sort=new" -y 2024
+
+Custom output folder:
+  python substack_archive_scraper.py "https://ruben.substack.com/archive?sort=new" -o ~/rubens_2025
+
+Help:
+  python substack_archive_scraper.py -h
+
+================================================================================
+                              WHAT YOU GET
+================================================================================
+
+substack_vault/
+├── INDEX.md                 ← Master index (start here!)
+├── articles/                ← One markdown file per article
+│   ├── Article_1.md
+│   ├── Article_2.md
+│   └── ...
+└── metadata.json            ← Raw data backup
+
+Each article contains:
+  ✓ Full content (clean Markdown)
+  ✓ Metadata (date, author, tags)
+  ✓ Link to original article
+  ✓ Topic tags
+
+================================================================================
+                          TROUBLESHOOTING
+================================================================================
+
+Issue                          Solution
+──────────────────────────────────────────────────────────────────────────────
+"No module named 'requests'"   pip install requests --break-system-packages
+
+"No module named 'bs4'"        pip install beautifulsoup4 --break-system-packages
+
+"Connection timed out"         Check internet, try again
+
+"No articles from 2025 found"  Try: python ... -y 2024 (to verify it works)
+
+"Content looks incomplete"     Visit original article URL in vault file
+
+"Failed to fetch archive"      Check URL is exactly:
+                               https://ruben.substack.com/archive?sort=new
+
+================================================================================
+                            FILE GUIDE
+================================================================================
+
+Your scrapers:
+  • substack_archive_scraper.py   ← For Ruben's archive (with year filter)
+  • substack_scraper.py            ← For any Substack (general purpose)
+
+Documentation:
+  • ARCHIVE_QUICKSTART.md          ← Read this first! (quick start)
+  • ARCHIVE_ADVANCED.md            ← Advanced tips, customization
+  • README.md                       ← File overview & which to use
+  • SETUP_GUIDE.md                 ← General scraper setup
+  • QUICKSTART.md                  ← General scraper quick start
+  • TECHNICAL.md                   ← Architecture & deep dive
+  • examples.py                    ← 9 code examples
+
+Start with:  ARCHIVE_QUICKSTART.md
+
+================================================================================
+                          PERFORMANCE
+================================================================================
+
+Time to scrape 20 articles: ~30-40 seconds
+Time to scrape 50 articles: ~1-2 minutes
+Installation:               ~1 minute
+
+Respectful rate limiting included (1 second between requests)
+
+================================================================================
+                         OBSIDIAN TIPS
+================================================================================
+
+Search:           Ctrl+Shift+F  (Windows)  or  Cmd+Shift+F  (Mac)
+Quick switch:     Ctrl+O        (Windows)  or  Cmd+O        (Mac)
+Create new note:  Ctrl+N        (Windows)  or  Cmd+N        (Mac)
+Link to note:     Type [[name]] and Obsidian auto-completes
+
+Use vault for:
+  ✓ Reading articles chronologically
+  ✓ Adding your own notes
+  ✓ Creating topic summaries
+  ✓ Building knowledge connections
+  ✓ Exporting to PDF/HTML later
+
+================================================================================
+                        CUSTOMIZATION
+================================================================================
+
+Get different year:
+  python substack_archive_scraper.py "..." -y 2024
+
+Different output:
+  python substack_archive_scraper.py "..." -o ~/My_Vault
+
+Advanced customization:
+  See ARCHIVE_ADVANCED.md for:
+    • Filtering specific articles
+    • Adding custom metadata
+    • Analyzing content
+    • Scheduling automatic updates
+    • Exporting to different formats
+
+================================================================================
+                        NEXT STEPS
+================================================================================
+
+1. Read ARCHIVE_QUICKSTART.md (5 minutes)
+2. Install dependencies (1 minute)
+3. Run the scraper (2 minutes)
+4. Open vault in Obsidian
+5. Explore and add your own notes!
+
+================================================================================
+                       ONE MORE THING
+================================================================================
+
+You have two scrapers:
+
+🎯 Archive Scraper (substack_archive_scraper.py)
+   └─ For: Archive pages with date filtering
+   └─ Perfect for: ruben.substack.com/archive?sort=new
+   └─ Use when: You want to filter by year (2025, 2024, etc.)
+
+📰 General Scraper (substack_scraper.py)
+   └─ For: Any Substack publication
+   └─ Use when: You just want all articles from a publication
+
+For your task: Use the Archive Scraper!
+
+================================================================================
+
+Questions? Check the documentation files or read code comments!
+
+Happy scraping! 🚀
+
+================================================================================

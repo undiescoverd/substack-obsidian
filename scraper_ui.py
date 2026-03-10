@@ -50,7 +50,7 @@ vault_name = st.text_input(
 )
 
 def normalize_url(raw: str) -> str:
-    """Accept any Substack URL and return the archive URL."""
+    """Accept any Substack URL and return the archive or single-article URL."""
     import re
     raw = raw.strip().rstrip("/").split("?")[0]
 
@@ -59,6 +59,10 @@ def normalize_url(raw: str) -> str:
     if match:
         username = match.group(1)
         return f"https://{username}.substack.com/archive?sort=new"
+
+    # Preserve single article URLs (e.g. username.substack.com/p/slug)
+    if '/p/' in raw:
+        return raw
 
     # Handle newsletter URLs: username.substack.com/anything -> username.substack.com/archive
     match = re.match(r'(https?://[a-zA-Z0-9_-]+\.substack\.com)', raw)
@@ -75,8 +79,12 @@ if st.button("▶ Run Scraper", type="primary", use_container_width=True):
     elif start_date > end_date:
         st.error("Start date must be before end date.")
     else:
-        archive_url = normalize_url(url)
-        st.caption(f"Using archive URL: `{archive_url}`")
+        resolved_url = normalize_url(url)
+        is_single = '/p/' in resolved_url
+        if is_single:
+            st.caption(f"Single article URL: `{resolved_url}`")
+        else:
+            st.caption(f"Using archive URL: `{resolved_url}`")
         scraper_path = Path(__file__).parent / "substack_archive_scraper.py"
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -84,11 +92,11 @@ if st.button("▶ Run Scraper", type="primary", use_container_width=True):
 
             cmd = [
                 sys.executable, str(scraper_path),
-                archive_url,
-                "--start-date", str(start_date),
-                "--end-date", str(end_date),
-                "-o", output_dir,
+                resolved_url,
             ]
+            if not is_single:
+                cmd += ["--start-date", str(start_date), "--end-date", str(end_date)]
+            cmd += ["-o", output_dir]
 
             log_placeholder = st.empty()
             log_lines = []

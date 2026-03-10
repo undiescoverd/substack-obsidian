@@ -1,0 +1,52 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## What This Is
+
+A Python scraper suite that converts Substack newsletters into Obsidian vaults (markdown files with YAML frontmatter and `[[wiki-links]]`).
+
+## Key Commands
+
+```bash
+# Install dependencies
+pip install -r requirements.txt --break-system-packages
+
+# Run archive scraper (primary code path)
+python3 substack_archive_scraper.py "https://example.substack.com/archive?sort=new"
+python3 substack_archive_scraper.py "https://example.substack.com/archive" -y 2025
+python3 substack_archive_scraper.py "https://example.substack.com/archive" --start-date 2025-01-01 --end-date 2025-12-31 -o ./my_vault
+
+# Run general scraper (secondary, no date filtering)
+python3 substack_scraper.py "https://example.substack.com" -o ./vault --full-content
+
+# Run Streamlit UI
+streamlit run scraper_ui.py
+
+# No test suite exists — verify manually by re-scraping and inspecting output files
+```
+
+## Architecture
+
+Two independent scrapers share no code:
+
+- **`substack_archive_scraper.py`** — Primary scraper. `SubstackArchiveScraper` class with API-first fetch (paginated `/api/v1/archive`), HTML fallback, year/date-range filtering, and author-subfolder organization. HTML-to-markdown uses a 3-phase pipeline: `_preprocess_html()` (BeautifulSoup DOM cleanup) → `SubstackMarkdownConverter` (markdownify with custom handlers for figures/captions/images/code) → `_postprocess_markdown()` (wiki-link restoration, whitespace normalization).
+
+- **`substack_scraper.py`** — General-purpose scraper. RSS-first with API fallback, no date filtering, flat file structure, regex-based HTML conversion. Not the primary code path — left unchanged during recent improvements.
+
+- **`scraper_ui.py`** — Streamlit UI wrapping the archive scraper. Handles URL normalization (including `substack.com/@username` reader URLs), date pickers, progress logging, and zip download.
+
+## Data Flow
+
+`URL → API fetch (paginated) → filter by year/date → fetch article HTML → preprocess DOM → markdownify → postprocess → write .md files + metadata.json`
+
+Output vault structure: `substack_vault/articles/{Author_Name}/{Article_Title}.md`
+
+Each article has YAML frontmatter (title, subtitle, author, date, url, tags) and internal Substack cross-references converted to `[[wiki-links]]` via slug matching.
+
+## Key Patterns
+
+- **Wiki-links**: Internal Substack `/p/slug` links are converted to `[[slug]]` when the slug exists in the current scrape's article set. The archive scraper uses a null-byte placeholder (`\x00WIKI[slug]\x00`) during preprocessing to survive the markdownify pass.
+- **Rate limiting**: 0.5s between API pages, 1s between article fetches.
+- **Date normalization**: `normalize_date()` handles ISO datetimes, `YYYY-MM-DD`, and natural date strings (`Jan 15, 2025`).
+- **Widget removal**: Substack injects subscription/share widgets that produce orphan text — these are decomposed in preprocessing and stripped in postprocessing as belt-and-suspenders.
