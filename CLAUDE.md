@@ -50,3 +50,13 @@ Each article has YAML frontmatter (title, subtitle, author, date, url, tags) and
 - **Rate limiting**: 0.5s between API pages, 1s between article fetches.
 - **Date normalization**: `normalize_date()` handles ISO datetimes, `YYYY-MM-DD`, and natural date strings (`Jan 15, 2025`).
 - **Widget removal**: Substack injects subscription/share widgets that produce orphan text — these are decomposed in preprocessing and stripped in postprocessing as belt-and-suspenders.
+
+## Obsidian Compatibility — Critical Rules
+
+The output markdown must be valid for Obsidian's renderer. Violations here break image rendering and document display:
+
+- **Escape `$$` sequences**: Obsidian treats `$$` as LaTeX display math. If `$$` appears in article text (e.g. `$$$`) without a closing `$$`, it corrupts ALL rendering after it — images show as raw `![]()` text instead of loading. The postprocessor escapes `$$+` to `\$\$+` via regex.
+- **Strip CDN signature tokens**: Substack injects `$s_!...!,` tokens into `substackcdn.com` image URLs. These are unnecessary (CDN serves images without them) and make URLs ugly. Stripped in `_preprocess_html()`.
+- **Unwrap image link wrappers**: Substack wraps images in `<a href="substackcdn..."><div class="image2-inset"><img></div></a>`. Without unwrapping, markdownify produces nested `[![](img)](link)` which is noisy. Preprocessing removes `div.image2-inset`, `div.image-link-expand`, and unwraps `<a>` tags linking to `substackcdn.com/image`.
+- **Images on single lines**: `![](url)` MUST be on one unbroken line — if the `![]` and `(url)` are split across lines, Obsidian renders raw text instead of an image. The custom `convert_img()` in `SubstackMarkdownConverter` handles this.
+- **Single article mode**: URLs with `/p/` are detected as single articles. The UI auto-hides date pickers and the scraper skips archive pagination.

@@ -457,6 +457,10 @@ class SubstackArchiveScraper:
         # Restore wiki-link placeholders
         markdown = re.sub(r'\x00WIKI\[([^\]]+)\]\x00', r'[[\1]]', markdown)
 
+        # Escape dollar signs that would trigger Obsidian's LaTeX math renderer
+        # $$ starts a display math block — if unclosed it breaks all subsequent rendering
+        markdown = re.sub(r'\${2,}', lambda m: '\\$' * len(m.group()), markdown)
+
         # Collapse 3+ blank lines to 2
         markdown = re.sub(r'\n{3,}', '\n\n', markdown)
 
