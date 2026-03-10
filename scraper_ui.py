@@ -48,17 +48,21 @@ vault_name = st.text_input(
 
 def normalize_url(raw: str) -> str:
     """Accept any Substack URL and return the archive URL."""
-    raw = raw.strip().rstrip("/")
-    # Strip query params to get base
-    base = raw.split("?")[0]
-    # Remove known path suffixes so we always start from root
-    for suffix in ["/archive", "/about", "/posts", "/podcast"]:
-        if base.endswith(suffix):
-            base = base[: -len(suffix)]
-    # Must be a substack.com domain
-    if ".substack.com" not in base and "substack.com" not in base:
-        return raw  # return as-is, scraper will error with a clear message
-    return base + "/archive?sort=new"
+    import re
+    raw = raw.strip().rstrip("/").split("?")[0]
+
+    # Handle reader app URLs: substack.com/@username/... -> username.substack.com
+    match = re.match(r'https?://substack\.com/@([a-zA-Z0-9_-]+)', raw)
+    if match:
+        username = match.group(1)
+        return f"https://{username}.substack.com/archive?sort=new"
+
+    # Handle newsletter URLs: username.substack.com/anything -> username.substack.com/archive
+    match = re.match(r'(https?://[a-zA-Z0-9_-]+\.substack\.com)', raw)
+    if match:
+        return match.group(1) + "/archive?sort=new"
+
+    return raw  # return as-is, scraper will surface an error
 
 
 # --- Run ---
