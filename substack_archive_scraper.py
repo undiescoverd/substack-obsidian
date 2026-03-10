@@ -55,7 +55,29 @@ class SubstackArchiveScraper:
         if match:
             return match.group(1)
         return "substack"
-    
+
+    def normalize_date(self, date_str: Optional[str]) -> str:
+        """Normalize various date formats to YYYY-MM-DD. Returns 'Unknown' on failure."""
+        if not date_str or date_str == 'Unknown':
+            return 'Unknown'
+
+        # Already YYYY-MM-DD
+        if re.match(r'^\d{4}-\d{2}-\d{2}$', date_str.strip()):
+            return date_str.strip()
+
+        # ISO datetime (e.g. "2025-10-15T14:30:00.000Z")
+        if re.match(r'^\d{4}-\d{2}-\d{2}T', date_str):
+            return date_str[:10]
+
+        # Try common text formats
+        for fmt in ('%B %d, %Y', '%b %d, %Y', '%B %d %Y', '%b %d %Y'):
+            try:
+                return datetime.strptime(date_str.strip(), fmt).strftime('%Y-%m-%d')
+            except ValueError:
+                continue
+
+        return 'Unknown'
+
     def fetch_archive_page(self) -> Optional[str]:
         """Fetch the archive page HTML."""
         try:
@@ -66,7 +88,60 @@ class SubstackArchiveScraper:
         except Exception as e:
             print(f"Failed to fetch archive page: {e}")
             return None
-    
+
+    def fetch_articles_via_api(self) -> List[Dict]:
+        """Fetch all articles via Substack's /api/v1/archive JSON endpoint with pagination."""
+        pub_name = self.extract_publication_name()
+        base_url = f"https://{pub_name}.substack.com/api/v1/archive"
+        articles = []
+        offset = 0
+        limit = 12
+
+        try:
+            while True:
+                params = {'sort': 'new', 'offset': offset, 'limit': limit}
+                print(f"  API page offset={offset}...")
+                response = self.session.get(base_url, params=params, timeout=15)
+                response.raise_for_status()
+                posts = response.json()
+
+                if not posts:
+                    break
+
+                for post in posts:
+                    canonical = post.get('canonical_url', '')
+                    slug = post.get('slug', '')
+                    if not canonical and slug:
+                        canonical = f"https://{pub_name}.substack.com/p/{slug}"
+
+                    authors = post.get('publishedBylines', [])
+                    author = authors[0].get('name', 'Unknown') if authors else 'Unknown'
+
+                    tags = [t.get('name', '') for t in post.get('postTags', [])]
+
+                    articles.append({
+                        'title': post.get('title', 'Untitled'),
+                        'subtitle': post.get('subtitle', ''),
+                        'url': canonical,
+                        'slug': slug,
+                        'date': self.normalize_date(post.get('post_date', '')),
+                        'author': author,
+                        'content': post.get('body_html', ''),
+                        'tags': tags,
+                    })
+
+                offset += limit
+                time.sleep(0.5)
+
+        except Exception as e:
+            print(f"  API fetch failed: {e}")
+            if articles:
+                print(f"  Returning {len(articles)} articles fetched before failure")
+            return articles
+
+        print(f"  API returned {len(articles)} total articles")
+        return articles
+
     def parse_archive_page(self, html: str) -> List[Dict]:
         """Parse archive page HTML to extract article information."""
         articles = []
@@ -110,7 +185,7 @@ class SubstackArchiveScraper:
                             date_text = parent.get_text(strip=True)
                             date_match = re.search(r'(\w+\s+\d+,\s+\d{4})', date_text)
                             if date_match:
-                                article['date'] = date_match.group(1)
+                                article['date'] = self.normalize_date(date_match.group(1))
                                 break
                             parent = parent.parent
                     
@@ -135,26 +210,22 @@ class SubstackArchiveScraper:
             
             soup = BeautifulSoup(response.content, 'html.parser')
             
-            # Extract date - article pages use text like "Mar 08, 2026"
+            # Extract date
             date_str = article.get('date')
 
-            # Try <time datetime="..."> first (archive listing pages)
+            # Try <time datetime="..."> first
             time_elem = soup.find('time', {'datetime': True})
             if time_elem:
-                date_str = time_elem['datetime'][:10]
+                date_str = time_elem['datetime']
 
-            if not date_str:
+            if not date_str or date_str == 'Unknown':
                 # Fallback: parse "Month DD, YYYY" from page text
                 page_text = soup.get_text()
                 date_match = re.search(r'(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2},\s+\d{4}', page_text)
                 if date_match:
-                    try:
-                        date_obj = datetime.strptime(date_match.group(0), '%b %d, %Y')
-                        date_str = date_obj.strftime('%Y-%m-%d')
-                    except ValueError:
-                        pass
+                    date_str = date_match.group(0)
 
-            article['date'] = date_str or 'Unknown'
+            article['date'] = self.normalize_date(date_str)
 
             # Extract author - look for substack profile links
             author_link = soup.find('a', {'href': re.compile(r'substack\.com/@')})
@@ -298,11 +369,17 @@ class SubstackArchiveScraper:
         return filename
     
     def create_markdown_file(self, article: Dict) -> str:
-        """Create a markdown file for an article."""
-        
+        """Create a markdown file for an article, organized by author subfolder."""
+
+        # Organize into author subfolder
+        author = article.get('author', 'Unknown')
+        safe_author = self.sanitize_filename(author) if author and author != 'Unknown' else 'Unknown'
+        author_dir = self.articles_dir / safe_author
+        author_dir.mkdir(exist_ok=True)
+
         safe_title = self.sanitize_filename(article['title'])
         filename = f"{safe_title}.md"
-        filepath = self.articles_dir / filename
+        filepath = author_dir / filename
         
         # Create frontmatter
         date_str = article.get('date', 'Unknown')
@@ -353,45 +430,42 @@ tags: {json.dumps(tags)}
         return filename
     
     def generate_index(self):
-        """Generate an index file for the vault."""
-        
+        """Generate an index file for the vault, grouped by author."""
+
         if not self.articles:
             return
-        
+
         pub_name = self.extract_publication_name()
-        
-        index_content = f"""# {pub_name.title()} - {self.year_filter} Archive
+
+        index_content = f"""# Substack Archive
 
 Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-
-## Overview
-
-Knowledge base of articles from **{pub_name}.substack.com** published in **{self.year_filter}**.
 
 **Total Articles:** {len(self.articles)}
 
 ---
 
-## Articles by Date (Newest First)
-
 """
-        
-        # Sort by date (newest first)
-        sorted_articles = sorted(
-            self.articles,
-            key=lambda x: x.get('date', ''),
-            reverse=True
-        )
-        
-        for article in sorted_articles:
-            date_str = article['date']
-            safe_title = self.sanitize_filename(article['title'])
-            index_content += f"### [{article['title']}]({safe_title}.md)\n"
-            index_content += f"**{date_str}**\n"
-            if article.get('subtitle'):
-                index_content += f"> {article['subtitle']}\n"
+
+        # Group by author, then sort each group by date (newest first)
+        from collections import defaultdict
+        by_author = defaultdict(list)
+        for article in self.articles:
+            author = article.get('author', 'Unknown')
+            by_author[author].append(article)
+
+        for author in sorted(by_author.keys()):
+            safe_author = self.sanitize_filename(author) if author and author != 'Unknown' else 'Unknown'
+            articles = sorted(by_author[author], key=lambda x: x.get('date', ''), reverse=True)
+            index_content += f"## {author}\n\n"
+
+            for article in articles:
+                date_str = article['date']
+                safe_title = self.sanitize_filename(article['title'])
+                index_content += f"- [{article['title']}](articles/{safe_author}/{safe_title}.md) — {date_str}\n"
+
             index_content += "\n"
-        
+
         with open(self.index_file, 'w', encoding='utf-8') as f:
             f.write(index_content)
         
@@ -414,11 +488,21 @@ Knowledge base of articles from **{pub_name}.substack.com** published in **{self
         print(f"Metadata saved: {self.metadata_file}")
     
     def scrape_all(self) -> List[Dict]:
-        """Fetch all articles from archive without filtering."""
+        """Fetch all articles from archive. Tries API first, falls back to HTML scraping."""
         print(f"\n{'='*60}")
         print(f"Substack Archive Scraper")
         print(f"{'='*60}\n")
 
+        # Try API first — returns all articles with pagination and clean dates
+        print("Trying API endpoint...")
+        articles = self.fetch_articles_via_api()
+
+        if articles:
+            print(f"\nFetched {len(articles)} articles via API\n")
+            return articles
+
+        # Fall back to HTML scraping (single page only)
+        print("API returned no articles, falling back to HTML scraping...")
         html = self.fetch_archive_page()
         if not html:
             return []

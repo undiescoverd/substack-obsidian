@@ -34,17 +34,11 @@ url = st.text_input(
     help="Paste any Substack URL — homepage, archive, or post link. We'll find the archive automatically.",
 )
 
-all_articles = st.toggle("Get all articles", value=True)
-
-if not all_articles:
-    col1, col2 = st.columns(2)
-    with col1:
-        start_date = st.date_input("From", value=date.today() - timedelta(days=365))
-    with col2:
-        end_date = st.date_input("To", value=date.today())
-else:
-    start_date = date(2010, 1, 1)
-    end_date = date.today()
+col1, col2 = st.columns(2)
+with col1:
+    start_date = st.date_input("From", value=date.today() - timedelta(days=365))
+with col2:
+    end_date = st.date_input("To", value=date.today())
 
 vault_name = st.text_input(
     "Vault name (used as folder name inside the zip)",
