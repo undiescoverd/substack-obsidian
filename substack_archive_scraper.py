@@ -14,7 +14,34 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Optional
 from urllib.parse import urljoin
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, NavigableString
+from markdownify import MarkdownConverter, ATX
+
+class SubstackMarkdownConverter(MarkdownConverter):
+    """Custom markdownify converter tuned for Substack HTML."""
+
+    class Options(MarkdownConverter.Options):
+        heading_style = ATX
+        bullets = '-'
+
+    def convert_figure(self, el, text, **kwargs):
+        return f'\n\n{text.strip()}\n\n'
+
+    def convert_figcaption(self, el, text, **kwargs):
+        return f'\n\n*{text.strip()}*\n\n'
+
+    def convert_img(self, el, text, **kwargs):
+        alt = el.get('alt', '')
+        src = el.get('src', '')
+        if not src:
+            return ''
+        return f'\n\n![{alt}]({src})\n\n'
+
+    def convert_pre(self, el, text, **kwargs):
+        code_el = el.find('code')
+        code_text = code_el.get_text() if code_el else el.get_text()
+        return f'\n\n```\n{code_text}\n```\n\n'
+
 
 class SubstackArchiveScraper:
     """Scrapes Substack archive pages and creates Obsidian vault."""
@@ -324,7 +351,12 @@ class SubstackArchiveScraper:
         return filtered
     
     def html_to_markdown(self, html_content: str, known_slugs: set = None) -> str:
-        """Convert HTML content to clean Markdown.
+        """Convert HTML content to clean Markdown using markdownify.
+
+        Three-phase pipeline:
+          1. Pre-process HTML (remove widgets, clean headings, mark wiki-links)
+          2. Convert to markdown via SubstackMarkdownConverter
+          3. Post-process markdown (restore wiki-links, collapse whitespace)
 
         Args:
             html_content: Raw HTML string
@@ -332,80 +364,80 @@ class SubstackArchiveScraper:
         """
         if not html_content:
             return ""
-
         if known_slugs is None:
             known_slugs = set()
 
-        # Remove script and style tags
-        html_content = re.sub(r'<script[^>]*>.*?</script>', '', html_content, flags=re.DOTALL)
-        html_content = re.sub(r'<style[^>]*>.*?</style>', '', html_content, flags=re.DOTALL)
+        soup = self._preprocess_html(html_content, known_slugs)
+        markdown = SubstackMarkdownConverter().convert_soup(soup)
+        return self._postprocess_markdown(markdown)
 
-        # Images: strip srcset/sizes attributes and <picture>/<source> wrappers BEFORE
-        # any other conversion so they don't leak into markdown link text.
-        html_content = re.sub(r'\s*srcset=["\'][^"\']*["\']', '', html_content)
-        html_content = re.sub(r'\s*sizes=["\'][^"\']*["\']', '', html_content)
-        html_content = re.sub(r'<picture[^>]*>(.*?)</picture>', r'\1', html_content, flags=re.DOTALL)
-        html_content = re.sub(r'<source[^>]*/?\s*>', '', html_content)
-        html_content = re.sub(r'<img[^>]*src=["\']([^"\']*)["\'][^>]*alt=["\']([^"\']*)["\'][^>]*/?\s*>', r'![\2](\1)\n', html_content, flags=re.DOTALL)
-        html_content = re.sub(r'<img[^>]*src=["\']([^"\']*)["\'][^>]*/?\s*>', r'![](\1)\n', html_content, flags=re.DOTALL)
+    def _preprocess_html(self, html_content: str, known_slugs: set) -> BeautifulSoup:
+        """Phase 1: Clean HTML before markdownify conversion."""
+        soup = BeautifulSoup(html_content, 'html.parser')
 
-        # Headers
-        html_content = re.sub(r'<h1[^>]*>(.*?)</h1>', r'# \1', html_content, flags=re.DOTALL)
-        html_content = re.sub(r'<h2[^>]*>(.*?)</h2>', r'## \1', html_content, flags=re.DOTALL)
-        html_content = re.sub(r'<h3[^>]*>(.*?)</h3>', r'### \1', html_content, flags=re.DOTALL)
-        html_content = re.sub(r'<h4[^>]*>(.*?)</h4>', r'#### \1', html_content, flags=re.DOTALL)
+        # Remove Substack widget subtrees
+        widget_classes = [
+            'subscription-widget', 'subscribe-widget', 'button-wrapper',
+            'share-dialog', 'captioned-button-wrap', 'post-cta',
+        ]
+        for cls in widget_classes:
+            for el in soup.find_all(class_=re.compile(cls)):
+                el.decompose()
 
-        # Bold and italic
-        html_content = re.sub(r'<strong[^>]*>(.*?)</strong>', r'**\1**', html_content, flags=re.DOTALL)
-        html_content = re.sub(r'<b[^>]*>(.*?)</b>', r'**\1**', html_content, flags=re.DOTALL)
-        html_content = re.sub(r'<em[^>]*>(.*?)</em>', r'*\1*', html_content, flags=re.DOTALL)
-        html_content = re.sub(r'<i[^>]*>(.*?)</i>', r'*\1*', html_content, flags=re.DOTALL)
+        # Unwrap <picture> tags, remove <source> tags
+        for picture in soup.find_all('picture'):
+            picture.unwrap()
+        for source in soup.find_all('source'):
+            source.decompose()
 
-        # Convert internal Substack cross-post links to Obsidian [[wiki-links]]
-        def _replace_link(match):
-            href = match.group(1)
-            text = match.group(2)
+        # Strip noisy image attributes
+        for img in soup.find_all('img'):
+            for attr in ('srcset', 'sizes', 'loading', 'decoding'):
+                img.attrs.pop(attr, None)
+
+        # Unwrap image-only <a> wrappers (Substack clickable image links)
+        for a_tag in soup.find_all('a'):
+            children = list(a_tag.children)
+            if len(children) == 1 and getattr(children[0], 'name', None) == 'img':
+                a_tag.unwrap()
+
+        # Clean headings: replace <br> with space, unwrap full-span <strong>/<em>
+        for tag in soup.find_all(re.compile(r'^h[1-6]$')):
+            for br in tag.find_all('br'):
+                br.replace_with(' ')
+            for wrapper_tag in ('strong', 'em'):
+                for wrapper in tag.find_all(wrapper_tag):
+                    if wrapper.get_text(strip=True) == tag.get_text(strip=True):
+                        wrapper.unwrap()
+
+        # Convert internal Substack links to placeholder for wiki-links
+        for a_tag in soup.find_all('a', href=True):
+            href = a_tag['href']
             slug_match = re.search(r'/p/([a-zA-Z0-9-]+)', href)
             if slug_match and slug_match.group(1) in known_slugs:
-                return f'[[{slug_match.group(1)}]]'
-            return f'[{text}]({href})'
+                slug = slug_match.group(1)
+                a_tag.replace_with(f'\x00WIKI[{slug}]\x00')
 
-        html_content = re.sub(r'<a[^>]*href=["\']([^"\']*)["\'][^>]*>(.*?)</a>', _replace_link, html_content, flags=re.DOTALL)
-        
-        # Blockquotes
-        html_content = re.sub(r'<blockquote[^>]*>(.*?)</blockquote>', r'> \1', html_content, flags=re.DOTALL)
-        
-        # Code blocks
-        html_content = re.sub(r'<pre[^>]*>(.*?)</pre>', r'```\n\1\n```', html_content, flags=re.DOTALL)
-        html_content = re.sub(r'<code[^>]*>(.*?)</code>', r'`\1`', html_content, flags=re.DOTALL)
-        
-        # Paragraphs
-        html_content = re.sub(r'</p>', '\n\n', html_content, flags=re.DOTALL)
-        html_content = re.sub(r'<p[^>]*>', '', html_content, flags=re.DOTALL)
-        
-        # Line breaks
-        html_content = re.sub(r'<br\s*/?>', '\n', html_content)
-        
-        # Lists
-        html_content = re.sub(r'<li[^>]*>(.*?)</li>', r'- \1\n', html_content, flags=re.DOTALL)
-        html_content = re.sub(r'<[ou]l[^>]*>', '', html_content, flags=re.DOTALL)
-        html_content = re.sub(r'</[ou]l>', '', html_content, flags=re.DOTALL)
-        
-        # Remove remaining HTML tags
-        html_content = re.sub(r'<[^>]+>', '', html_content)
-        
-        # Clean up HTML entities
-        html_content = html_content.replace('&nbsp;', ' ')
-        html_content = html_content.replace('&lt;', '<')
-        html_content = html_content.replace('&gt;', '>')
-        html_content = html_content.replace('&amp;', '&')
-        html_content = html_content.replace('&quot;', '"')
-        
-        # Clean up whitespace
-        html_content = re.sub(r'\n\n+', '\n\n', html_content)
-        html_content = html_content.strip()
-        
-        return html_content
+        return soup
+
+    def _postprocess_markdown(self, markdown: str) -> str:
+        """Phase 3: Clean up markdownify output."""
+        # Restore wiki-link placeholders
+        markdown = re.sub(r'\x00WIKI\[([^\]]+)\]\x00', r'[[\1]]', markdown)
+
+        # Collapse 3+ blank lines to 2
+        markdown = re.sub(r'\n{3,}', '\n\n', markdown)
+
+        # Strip trailing whitespace per line
+        markdown = re.sub(r'[ \t]+$', '', markdown, flags=re.MULTILINE)
+
+        # Remove orphan "Subscribe" / "Share" lines
+        markdown = re.sub(r'(?m)^\s*(Subscribe|Share)\s*$', '', markdown)
+
+        # Collapse again after orphan removal
+        markdown = re.sub(r'\n{3,}', '\n\n', markdown)
+
+        return markdown.strip()
     
     def sanitize_filename(self, filename: str) -> str:
         """Convert a string to a safe filename."""
