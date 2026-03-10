@@ -25,6 +25,8 @@ with st.expander("How to use", expanded=False):
 3. Click **Run Scraper**
 4. Download the zip when it's done
 5. Unzip it, then open Obsidian → **Open folder as vault** → select the unzipped folder
+
+**Multiple authors?** Use the same vault name for each scrape and unzip into the same folder — each author gets their own subfolder under `articles/`.
 """)
 
 # --- Inputs ---
@@ -34,11 +36,12 @@ url = st.text_input(
     help="Paste any Substack URL — homepage, archive, or post link. We'll find the archive automatically.",
 )
 
+today = date.today()
 col1, col2 = st.columns(2)
 with col1:
-    start_date = st.date_input("From", value=date.today() - timedelta(days=365))
+    start_date = st.date_input("From", value=today, min_value=date(2010, 1, 1), max_value=today)
 with col2:
-    end_date = st.date_input("To", value=date.today())
+    end_date = st.date_input("To", value=today, min_value=date(2010, 1, 1), max_value=today)
 
 vault_name = st.text_input(
     "Vault name (used as folder name inside the zip)",
@@ -108,7 +111,7 @@ if st.button("▶ Run Scraper", type="primary", use_container_width=True):
             else:
                 # Check articles were actually created
                 articles_dir = Path(output_dir) / "articles"
-                article_count = len(list(articles_dir.glob("*.md"))) if articles_dir.exists() else 0
+                article_count = len(list(articles_dir.glob("**/*.md"))) if articles_dir.exists() else 0
 
                 if article_count == 0:
                     st.warning("No articles were found for the selected date range. Try widening the date range.")
@@ -137,5 +140,5 @@ if st.button("▶ Run Scraper", type="primary", use_container_width=True):
 2. Open Obsidian
 3. Click **Open folder as vault**
 4. Select the unzipped folder
-5. Open `INDEX.md` to start browsing
+5. Browse articles in the sidebar — cross-post links are wiki-linked for graph view
 """)

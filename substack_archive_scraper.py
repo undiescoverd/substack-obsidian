@@ -39,7 +39,6 @@ class SubstackArchiveScraper:
         self.articles_dir.mkdir(exist_ok=True)
         
         self.metadata_file = self.output_dir / "metadata.json"
-        self.index_file = self.output_dir / "INDEX.md"
         
         self.session = requests.Session()
         self.session.headers.update({
@@ -201,6 +200,32 @@ class SubstackArchiveScraper:
         
         return articles
     
+    def fetch_article_content(self, article: Dict) -> Dict:
+        """Fetch full article body HTML from the article page.
+
+        Only sets article['content']. Does not overwrite metadata
+        fields (author, date, tags) which are better from the API.
+        """
+        try:
+            response = self.session.get(article['url'], timeout=10)
+            response.raise_for_status()
+            soup = BeautifulSoup(response.content, 'html.parser')
+
+            content_elem = soup.find('div', {'class': 'available-content'})
+            if content_elem:
+                body = content_elem.find('div', {'class': 'body'})
+                if body:
+                    content_elem = body
+            if not content_elem:
+                content_elem = soup.find('div', {'class': re.compile('.*post-content.*')})
+
+            article['content'] = str(content_elem) if content_elem else ''
+
+            time.sleep(1)  # Rate limiting
+        except Exception as e:
+            print(f"    Error fetching content: {e}")
+        return article
+
     def fetch_article_details(self, article: Dict) -> Dict:
         """Fetch detailed article information from the article page."""
         try:
@@ -298,29 +323,54 @@ class SubstackArchiveScraper:
                 continue
         return filtered
     
-    def html_to_markdown(self, html_content: str) -> str:
-        """Convert HTML content to clean Markdown."""
+    def html_to_markdown(self, html_content: str, known_slugs: set = None) -> str:
+        """Convert HTML content to clean Markdown.
+
+        Args:
+            html_content: Raw HTML string
+            known_slugs: Set of article slugs for converting internal links to [[wiki-links]]
+        """
         if not html_content:
             return ""
-        
+
+        if known_slugs is None:
+            known_slugs = set()
+
         # Remove script and style tags
         html_content = re.sub(r'<script[^>]*>.*?</script>', '', html_content, flags=re.DOTALL)
         html_content = re.sub(r'<style[^>]*>.*?</style>', '', html_content, flags=re.DOTALL)
-        
+
+        # Images: strip srcset/sizes attributes and <picture>/<source> wrappers BEFORE
+        # any other conversion so they don't leak into markdown link text.
+        html_content = re.sub(r'\s*srcset=["\'][^"\']*["\']', '', html_content)
+        html_content = re.sub(r'\s*sizes=["\'][^"\']*["\']', '', html_content)
+        html_content = re.sub(r'<picture[^>]*>(.*?)</picture>', r'\1', html_content, flags=re.DOTALL)
+        html_content = re.sub(r'<source[^>]*/?\s*>', '', html_content)
+        html_content = re.sub(r'<img[^>]*src=["\']([^"\']*)["\'][^>]*alt=["\']([^"\']*)["\'][^>]*/?\s*>', r'![\2](\1)\n', html_content, flags=re.DOTALL)
+        html_content = re.sub(r'<img[^>]*src=["\']([^"\']*)["\'][^>]*/?\s*>', r'![](\1)\n', html_content, flags=re.DOTALL)
+
         # Headers
         html_content = re.sub(r'<h1[^>]*>(.*?)</h1>', r'# \1', html_content, flags=re.DOTALL)
         html_content = re.sub(r'<h2[^>]*>(.*?)</h2>', r'## \1', html_content, flags=re.DOTALL)
         html_content = re.sub(r'<h3[^>]*>(.*?)</h3>', r'### \1', html_content, flags=re.DOTALL)
         html_content = re.sub(r'<h4[^>]*>(.*?)</h4>', r'#### \1', html_content, flags=re.DOTALL)
-        
+
         # Bold and italic
         html_content = re.sub(r'<strong[^>]*>(.*?)</strong>', r'**\1**', html_content, flags=re.DOTALL)
         html_content = re.sub(r'<b[^>]*>(.*?)</b>', r'**\1**', html_content, flags=re.DOTALL)
         html_content = re.sub(r'<em[^>]*>(.*?)</em>', r'*\1*', html_content, flags=re.DOTALL)
         html_content = re.sub(r'<i[^>]*>(.*?)</i>', r'*\1*', html_content, flags=re.DOTALL)
-        
-        # Links
-        html_content = re.sub(r'<a[^>]*href=["\']([^"\']*)["\'][^>]*>(.*?)</a>', r'[\2](\1)', html_content, flags=re.DOTALL)
+
+        # Convert internal Substack cross-post links to Obsidian [[wiki-links]]
+        def _replace_link(match):
+            href = match.group(1)
+            text = match.group(2)
+            slug_match = re.search(r'/p/([a-zA-Z0-9-]+)', href)
+            if slug_match and slug_match.group(1) in known_slugs:
+                return f'[[{slug_match.group(1)}]]'
+            return f'[{text}]({href})'
+
+        html_content = re.sub(r'<a[^>]*href=["\']([^"\']*)["\'][^>]*>(.*?)</a>', _replace_link, html_content, flags=re.DOTALL)
         
         # Blockquotes
         html_content = re.sub(r'<blockquote[^>]*>(.*?)</blockquote>', r'> \1', html_content, flags=re.DOTALL)
@@ -340,10 +390,6 @@ class SubstackArchiveScraper:
         html_content = re.sub(r'<li[^>]*>(.*?)</li>', r'- \1\n', html_content, flags=re.DOTALL)
         html_content = re.sub(r'<[ou]l[^>]*>', '', html_content, flags=re.DOTALL)
         html_content = re.sub(r'</[ou]l>', '', html_content, flags=re.DOTALL)
-        
-        # Images (preserve as markdown)
-        html_content = re.sub(r'<img[^>]*src=["\']([^"\']*)["\'][^>]*alt=["\']([^"\']*)["\']', r'![\2](\1)', html_content, flags=re.DOTALL)
-        html_content = re.sub(r'<img[^>]*src=["\']([^"\']*)["\']', r'![\1](\1)', html_content, flags=re.DOTALL)
         
         # Remove remaining HTML tags
         html_content = re.sub(r'<[^>]+>', '', html_content)
@@ -368,7 +414,7 @@ class SubstackArchiveScraper:
         filename = filename[:200]
         return filename
     
-    def create_markdown_file(self, article: Dict) -> str:
+    def create_markdown_file(self, article: Dict, known_slugs: set = None) -> str:
         """Create a markdown file for an article, organized by author subfolder."""
 
         # Organize into author subfolder
@@ -380,11 +426,11 @@ class SubstackArchiveScraper:
         safe_title = self.sanitize_filename(article['title'])
         filename = f"{safe_title}.md"
         filepath = author_dir / filename
-        
+
         # Create frontmatter
         date_str = article.get('date', 'Unknown')
         tags = article.get('tags', [])
-        
+
         frontmatter = f"""---
 title: {article['title']}
 subtitle: {article.get('subtitle', '')}
@@ -395,9 +441,9 @@ tags: {json.dumps(tags)}
 ---
 
 """
-        
+
         # Convert content to markdown
-        markdown_content = self.html_to_markdown(article.get('content', ''))
+        markdown_content = self.html_to_markdown(article.get('content', ''), known_slugs=known_slugs)
         
         # Build full file content
         full_content = frontmatter + f"# {article['title']}\n\n"
@@ -429,48 +475,6 @@ tags: {json.dumps(tags)}
         
         return filename
     
-    def generate_index(self):
-        """Generate an index file for the vault, grouped by author."""
-
-        if not self.articles:
-            return
-
-        pub_name = self.extract_publication_name()
-
-        index_content = f"""# Substack Archive
-
-Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-
-**Total Articles:** {len(self.articles)}
-
----
-
-"""
-
-        # Group by author, then sort each group by date (newest first)
-        from collections import defaultdict
-        by_author = defaultdict(list)
-        for article in self.articles:
-            author = article.get('author', 'Unknown')
-            by_author[author].append(article)
-
-        for author in sorted(by_author.keys()):
-            safe_author = self.sanitize_filename(author) if author and author != 'Unknown' else 'Unknown'
-            articles = sorted(by_author[author], key=lambda x: x.get('date', ''), reverse=True)
-            index_content += f"## {author}\n\n"
-
-            for article in articles:
-                date_str = article['date']
-                safe_title = self.sanitize_filename(article['title'])
-                index_content += f"- [{article['title']}](articles/{safe_author}/{safe_title}.md) — {date_str}\n"
-
-            index_content += "\n"
-
-        with open(self.index_file, 'w', encoding='utf-8') as f:
-            f.write(index_content)
-        
-        print(f"\nIndex created: {self.index_file}")
-    
     def save_metadata(self):
         """Save article metadata as JSON."""
         metadata = {
@@ -498,7 +502,11 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         articles = self.fetch_articles_via_api()
 
         if articles:
-            print(f"\nFetched {len(articles)} articles via API\n")
+            print(f"\nFetched {len(articles)} articles via API")
+            print(f"Fetching full article content...\n")
+            for i, article in enumerate(articles, 1):
+                print(f"  [{i}/{len(articles)}] {article['title'][:50]}...")
+                self.fetch_article_content(article)
             return articles
 
         # Fall back to HTML scraping (single page only)
@@ -530,33 +538,34 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         return filtered
     
     def generate(self):
-        """Generate all markdown files and index."""
-        
+        """Generate all markdown files."""
+
         if not self.articles:
             print("No articles to generate. Aborting.")
             return
-        
+
+        # Build set of known slugs for wiki-link conversion
+        known_slugs = {a['slug'] for a in self.articles if a.get('slug')}
+
         print(f"\nGenerating markdown files...\n")
-        
+
         for i, article in enumerate(self.articles, 1):
             try:
-                filename = self.create_markdown_file(article)
+                filename = self.create_markdown_file(article, known_slugs=known_slugs)
                 print(f"[{i}/{len(self.articles)}] Created: {filename}")
             except Exception as e:
                 print(f"[ERROR] Failed to create file for '{article['title']}': {e}")
-        
-        self.generate_index()
+
         self.save_metadata()
-        
+
         print(f"\n{'='*60}")
         print(f"✓ COMPLETED!")
         print(f"{'='*60}")
         print(f"\nVault created at: {self.output_dir.absolute()}\n")
         print(f"Next steps:")
         print(f"  1. Open Obsidian")
-        print(f"  2. Create new vault → 'Store in a folder on my computer'")
-        print(f"  3. Select: {self.output_dir.absolute()}")
-        print(f"  4. Open INDEX.md to start browsing\n")
+        print(f"  2. Open folder as vault → select: {self.output_dir.absolute()}")
+        print(f"  3. Browse articles in the sidebar\n")
 
 
 def main():
